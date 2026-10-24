@@ -1,0 +1,23 @@
+SONICSENSE - DATASET VALIDATION REPORT
+==========================================
+Metadata rows: 87620
+Unique recordings: 47400
+Unique segments: 87620
+
+LABEL COUNTS:
+label
+synthetic    68146
+human        19474
+
+VALIDATION CHECKS:
+PASS - Metadata contains rows
+PASS - All segments are 16 kHz
+PASS - All segments are mono
+PASS - All segments are 5 seconds
+PASS - All segments contain 80000 samples
+PASS - No missing processed file paths
+PASS - No duplicate segment IDs
+PASS - No recorded preprocessing errors
+
+Recorded preprocessing errors: 0
+Note: File existence and audio contents were not independently checked by this report.
