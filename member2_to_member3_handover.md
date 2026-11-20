@@ -63,20 +63,29 @@ evaluation.
 
 ## 5. Load the final CSV with Pandas
 
-The completed feature table can be loaded with Pandas:
+The completed feature table can be loaded using the Pandas library.
 
 ```python
 from pathlib import Path
 import pandas as pd
 
+# Specify the feature CSV file path
 feature_path = Path(r"C:\Sonic-Sense-main\audio_features_v2.csv")
+
+# Load the dataset
 data = pd.read_csv(feature_path)
 
-print(data.shape)
+# Display dataset dimensions
+print("Dataset shape:", data.shape)
+
+# Display column names
+print("Column names:")
 print(data.columns.tolist())
+
+# Display class distribution
+print("Class distribution:")
 print(data["label"].value_counts(dropna=False))
 ```
-
 ## 6. Separate X (features) and y (target)
 
 Keep identifier columns such as `filename` out of the model inputs. The target
