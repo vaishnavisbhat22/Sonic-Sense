@@ -1,0 +1,10 @@
+{
+    "Best_Model": "XGBoost",
+    "Accuracy": 0.9596343178621659,
+    "Precision_Human": 0.8698092031425365,
+    "Recall_Human": 0.9657320872274143,
+    "F1_Human": 0.9152642456451137,
+    "Macro_F1": 0.9443855613898974,
+    "Balanced_Accuracy": 0.9617942906618453,
+    "ROC_AUC": 0.99298615532184
+}
