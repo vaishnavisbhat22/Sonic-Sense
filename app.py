@@ -3,10 +3,15 @@ import streamlit as st
 import io
 import wave
 import math
+import json
+import joblib
+import pandas as pd
 import numpy as np
+from pathlib import Path
 from datetime import datetime
+from extract_audio_features import extract_audio_features_from_bytes
 
-# --------------------------------------------------
+
 # PAGE CONFIGURATION
 # --------------------------------------------------
 st.set_page_config(
@@ -15,6 +20,25 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+# --------------------------------------------------
+# --------------------------------------------------
+# LOAD TRAINED MACHINE LEARNING MODEL
+# --------------------------------------------------
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+@st.cache_resource
+def load_detection_model():
+    metadata_path = PROJECT_ROOT / "results" / "model_metadata.json"
+
+    with open(metadata_path, "r", encoding="utf-8") as file:
+        metadata = json.load(file)
+
+    model_path = PROJECT_ROOT / "models" / metadata["model_file"]
+    model = joblib.load(model_path)
+
+    return model, metadata
 
 # --------------------------------------------------
 # CUSTOM STYLING
@@ -431,22 +455,65 @@ with col_results:
     """, unsafe_allow_html=True)
 
     if st.session_state.get("analysis_requested", False):
-        st.markdown("""
-        <div class="panel" style="text-align:center;padding:34px 20px;">
-            <div style="font-size:2.5rem;">◈</div>
-            <div class="panel-title" style="margin-top:14px;">
-                Audio received successfully
+        try:
+            model, metadata = load_detection_model()
+
+            audio_bytes = st.session_state["selected_audio_bytes"]
+
+            # Extract the same 134 features used during training
+            features = extract_audio_features_from_bytes(audio_bytes)
+
+            feature_names = metadata["feature_columns"]
+
+            # Arrange features in the exact training order
+            input_data = pd.DataFrame(
+                [[features[name] for name in feature_names]],
+                columns=feature_names,
+            )
+
+            # Predict the audio class
+            prediction = int(model.predict(input_data)[0])
+
+            class_mapping = metadata["xgboost_class_mapping"]
+            predicted_label = class_mapping[str(prediction)]
+
+            # Calculate prediction confidence
+            probabilities = model.predict_proba(input_data)[0]
+            predicted_index = list(model.classes_).index(prediction)
+            confidence = float(probabilities[predicted_index]) * 100
+
+            st.session_state["prediction"] = predicted_label
+            st.session_state["confidence"] = confidence
+            st.session_state["inference_error"] = None
+
+        except Exception as error:
+            st.session_state["inference_error"] = str(error)
+        if st.session_state.get("inference_error"):
+            st.error(
+                "Analysis failed: "
+                + st.session_state["inference_error"]
+            )
+        else:
+            predicted_label = st.session_state["prediction"]
+            confidence = st.session_state["confidence"]
+
+            st.markdown(f"""
+            <div class="panel" style="text-align:center;padding:34px 20px;">
+                <div style="font-size:2.5rem;">◈</div>
+                <div class="panel-title" style="margin-top:14px;">
+                    Detection Complete
+                </div>
+                <div class="panel-title" style="margin-top:18px;color:#5CE1E6;">
+                    {predicted_label.upper()}
+                </div>
+                <div class="panel-subtitle" style="margin-top:10px;">
+                    Prediction confidence: {confidence:.2f}%
+                </div>
+                <div style="margin-top:20px;">
+                    <span class="status-pill">ANALYSIS COMPLETE</span>
+                </div>
             </div>
-            <div class="panel-subtitle" style="margin-top:10px;">
-                Your recording is stored in this session and is ready
-                for preprocessing. The trained classifier has not
-                been connected yet, so no prediction is available.
-            </div>
-            <div style="margin-top:20px;">
-                <span class="status-pill">AWAITING MODEL INTEGRATION</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
 
         st.markdown("#### Selected recording")
         st.write(st.session_state["selected_audio_name"])
