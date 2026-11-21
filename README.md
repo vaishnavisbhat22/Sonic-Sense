@@ -1,112 +1,124 @@
-# Sonic-Sense
-Sonic Sense is a synthetic speech detection system that helps identify whether an audio recording contains AI-generated speech or natural human speech.
-# Sonic Sense
+# SonicSense
 
-### Synthetic Speech Detection System
+SonicSense classifies an audio recording as **human** or **synthetic** using a
+trained XGBoost model. The repository includes a FastAPI backend and a Streamlit
+interface. The backend reuses the project training feature extractor in
+`extract_audio_features.py`; it does not retrain or modify the model.
 
-Sonic Sense is a project that aims to identify whether a speech recording comes from a real human speaker or has been generated using AI. As AI-generated voices become more realistic, telling them apart from genuine human speech just by listening is becoming increasingly difficult.
+## Requirements and installation
 
-Sonic Sense explores how audio analysis and machine learning can help identify synthetic speech through a simple, user-friendly application.
+Use Python 3.10 or later. From the repository root, create and activate a
+virtual environment, then install the backend and test dependencies:
 
-## Why Sonic Sense?
-
-AI-generated voices are becoming common in virtual assistants, automated content creation, and voice cloning. While these technologies have many useful applications, they can also be misused to create misleading audio or imitate real people.
-
-Sonic Sense focuses on addressing this challenge by analyzing speech recordings and predicting whether the audio is likely to be human or AI-generated.
-
-## What Are We Building?
-
-The project is divided into four main components:
-
-* **Frontend:** The interface users interact with to upload audio files and view analysis results.
-* **Backend:** Handles file uploads, validates requests, and connects the different components of the application.
-* **Detection Engine:** The core of the system. It analyzes speech recordings and predicts whether they are likely to be human or AI-generated.
-* **Testing and Integration:** Ensures that all components work together and evaluates how well the system performs on different types of audio.
-
-The final features and detection methods will depend on the implementation and evaluation results.
-
-## How Does It Work?
-
-The application follows a straightforward workflow:
-
-1. The user uploads an audio recording.
-2. The backend validates the file and prepares it for analysis.
-3. The detection engine processes the audio.
-4. The system generates a prediction indicating whether the speech is likely to be human or synthetic.
-5. The frontend displays the result to the user.
-
-The exact analysis process depends on the detection model and audio-processing techniques used.
-
-## Technology Stack
-
-The technology stack will be finalized as the project architecture and implementation take shape.
-
-| Component        | Technology                          |
-| ---------------- | ----------------------------------- |
-| Frontend         | To be finalized                     |
-| Backend          | To be finalized                     |
-| Detection Engine | To be finalized                     |
-| Audio Processing | To be finalized                     |
-| Database         | To be decided based on requirements |
-| Testing          | To be finalized                     |
-
-## Project Structure
-
-The repository is organized around the following components:
-
-```text
-sonic-sense/
-├── frontend/
-├── backend/
-├── core-engine/
-├── docs/
-├── tests/
-└── .github/
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r backend\requirements.txt
 ```
 
-The structure may evolve as development progresses.
+The requirements include FastAPI/Uvicorn and multipart upload support,
+Streamlit's HTTP client (`requests`), the audio stack (`librosa`, `soundfile`,
+NumPy, SciPy), model dependencies (XGBoost, scikit-learn, pandas, joblib), and
+the test runner.
 
-## Development Plan
+The backend expects the checked-in model and metadata at:
 
-The project is planned over approximately one month, with development divided into four workstreams:
+- `models/xgboost.joblib`
+- `results/model_metadata.json`
 
-1. **Frontend Development:** Building the interface and user interactions.
-2. **Backend and Database:** Implementing APIs, request handling, and data management where required.
-3. **Synthetic Speech Detection Engine:** Developing and evaluating the core detection functionality.
-4. **Integration, Testing, and Deployment:** Connecting the components, validating the complete application, and preparing it for release.
+The processed feature CSV is only needed for labeled dataset inference tests;
+it is not needed to run the API.
 
-Each component will be tested independently before and during integration.
+## Start the backend
 
-## Getting Started
+Run this command from the repository root:
 
-Setup instructions will be added once the technology stack and development environment are finalized.
+```powershell
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+```
 
-The guide will cover dependency installation, environment configuration, application startup, and testing.
+The API is available at `http://127.0.0.1:8000`; interactive OpenAPI
+documentation is at `http://127.0.0.1:8000/docs`.
 
-## Testing and Evaluation
+### API
 
-The system needs to be evaluated using suitable examples of both genuine human speech and AI-generated speech.
+`GET /health` checks model readiness and returns the status and model name.
 
-Performance will be assessed using metrics such as:
+`POST /predict` accepts one multipart upload with field name `audio`. Supported
+filename extensions are WAV, FLAC, MP3, OGG, and M4A; uploads are limited to
+25 MiB. The contents must also be decodable by the installed audio libraries.
 
-* **Precision:** How often the system's synthetic-speech predictions are correct.
-* **Recall:** How much of the synthetic speech in the evaluation set the system successfully identifies.
-* **F1-score:** A combined measure of precision and recall.
-* **Confusion Matrix:** A breakdown of correct and incorrect classifications.
+Example:
 
-Evaluation should also consider differences in speakers, accents, recording quality, and the methods used to generate synthetic speech.
+```powershell
+curl.exe -F "audio=@recording.wav" http://127.0.0.1:8000/predict
+```
 
-Results will be documented after testing. The evaluation should reflect the model's actual performance rather than relying on accuracy alone.
+The response contains `prediction` (`human` or `synthetic`), `confidence`,
+`human_probability`, `synthetic_probability`, `model_name`, and
+`processing_time_ms`. Confidence and class probabilities are fractions from 0
+to 1, not percentages. Class IDs remain `0 = synthetic` and `1 = human`;
+probability positions are read using the model's actual `classes_` values.
+Invalid file types and empty files return 4xx responses; undecodable audio
+returns 422, unavailable artifacts return 503, and inference failures are
+logged and returned as server errors without internal exception details.
 
-## Current Status
+The model expects exactly the 134 columns and order in
+`results/model_metadata.json`. The API validates the metadata against the
+shared feature extractor and the loaded model before serving predictions.
 
-Sonic Sense is currently under development. The implementation, features, detection methods, and evaluation results will be documented as the project progresses.
+## Start the frontend
 
-## Team
-Member 1:Disha M V
-Member 2:Pratheeksha A
-Member 3:Vaishnavi S
-Member 4:Varshini K J
+In a second terminal, with the virtual environment active:
 
-## License
-The project's license will be specified once the team has decided how the code should be shared and reused.
+```powershell
+streamlit run app.py
+```
+
+The Streamlit interface sends uploads to `http://127.0.0.1:8000/predict` and
+displays the returned class, confidence, class probabilities, model name, and
+processing time. To use a different backend URL, set
+`SONICSENSE_API_URL` to the full prediction URL before starting Streamlit:
+
+```powershell
+$env:SONICSENSE_API_URL = "http://127.0.0.1:8000/predict"
+streamlit run app.py
+```
+
+## Testing
+
+Run the backend and existing repository tests from the project root:
+
+```powershell
+python -m pytest -q
+```
+
+`backend/app/test_inference.py` exercises the HTTP API with generated test
+audio, invalid/empty uploads, model readiness, and feature-schema validation.
+These generated waveforms are pipeline tests, **not** labeled human or
+synthetic speech recordings.
+
+For five held-out feature rows of each actual class, run:
+
+```powershell
+python src\models\test_inference.py
+```
+
+That dataset inference command reports each sample's actual label, prediction,
+and confidence. The feature CSV is not checked into this repository; the
+script uses `data/processed/audio_features_v2.csv` when present, otherwise it
+tries the dataset path recorded in the model metadata. It fails clearly if
+neither exists. The model's recorded evaluation results are in `results/`;
+they are not a guarantee of future or real-world performance.
+
+## Known limitations
+
+- The saved evaluation used a stratified random split. Speaker/source
+  identifiers were unavailable, so it does not establish speaker-independent
+  or source-independent generalization.
+- Performance can vary with codecs, microphones, noise, accents, speakers,
+  and synthetic speech generators not represented in training data.
+- The output probabilities are model scores and are not documented as
+  calibrated probabilities.
+- A predicted class is not proof of whether a recording is genuine. Treat the
+  result as an automated estimate, not a definitive authenticity judgment.

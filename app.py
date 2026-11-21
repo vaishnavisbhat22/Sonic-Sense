@@ -1,15 +1,10 @@
 
 import streamlit as st
 import io
-import wave
 import math
-import json
-import joblib
-import pandas as pd
-import numpy as np
-from pathlib import Path
-from datetime import datetime
-from extract_audio_features import extract_audio_features_from_bytes
+import wave
+import os
+import requests
 
 
 # PAGE CONFIGURATION
@@ -23,22 +18,13 @@ st.set_page_config(
 
 # --------------------------------------------------
 # --------------------------------------------------
-# LOAD TRAINED MACHINE LEARNING MODEL
+# PREDICTION API
 # --------------------------------------------------
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-
-@st.cache_resource
-def load_detection_model():
-    metadata_path = PROJECT_ROOT / "results" / "model_metadata.json"
-
-    with open(metadata_path, "r", encoding="utf-8") as file:
-        metadata = json.load(file)
-
-    model_path = PROJECT_ROOT / "models" / metadata["model_file"]
-    model = joblib.load(model_path)
-
-    return model, metadata
+PREDICTION_API_URL = os.environ.get(
+    "SONICSENSE_API_URL",
+    "http://127.0.0.1:8000/predict",
+)
 
 # --------------------------------------------------
 # CUSTOM STYLING
@@ -448,54 +434,92 @@ with col_results:
             Analysis results
         </div>
         <div class="panel-subtitle">
-            Classification and confidence will appear here when
-            the trained detection model is connected.
+            Classification and confidence are returned by the SonicSense API.
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     if st.session_state.get("analysis_requested", False):
         try:
-            model, metadata = load_detection_model()
-
             audio_bytes = st.session_state["selected_audio_bytes"]
-
-            # Extract the same 134 features used during training
-            features = extract_audio_features_from_bytes(audio_bytes)
-
-            feature_names = metadata["feature_columns"]
-
-            # Arrange features in the exact training order
-            input_data = pd.DataFrame(
-                [[features[name] for name in feature_names]],
-                columns=feature_names,
+            response = requests.post(
+                PREDICTION_API_URL,
+                files={
+                    "audio": (
+                        st.session_state["selected_audio_name"],
+                        audio_bytes,
+                        st.session_state.get("selected_audio_type") or "application/octet-stream",
+                    )
+                },
+                timeout=(5, 120),
             )
+            response.raise_for_status()
+            result = response.json()
+            required_fields = {
+                "prediction",
+                "confidence",
+                "human_probability",
+                "synthetic_probability",
+                "model_name",
+                "processing_time_ms",
+            }
+            if not isinstance(result, dict) or not required_fields.issubset(result):
+                raise ValueError("The prediction API returned an invalid response.")
+            if not isinstance(result["prediction"], str) or result["prediction"] not in {
+                "human",
+                "synthetic",
+            }:
+                raise ValueError("The prediction API returned an unknown class label.")
+            for field in (
+                "confidence",
+                "human_probability",
+                "synthetic_probability",
+                "processing_time_ms",
+            ):
+                result[field] = float(result[field])
+                if not math.isfinite(result[field]) or result[field] < 0:
+                    raise ValueError("The prediction API returned invalid numeric values.")
+            if any(
+                result[field] > 1
+                for field in ("confidence", "human_probability", "synthetic_probability")
+            ):
+                raise ValueError("The prediction API returned probabilities outside 0-1.")
+            if not math.isclose(
+                result["human_probability"] + result["synthetic_probability"],
+                1.0,
+                abs_tol=1e-5,
+            ):
+                raise ValueError("The prediction API returned inconsistent probabilities.")
+            predicted_probability = result[
+                "human_probability"
+                if result["prediction"] == "human"
+                else "synthetic_probability"
+            ]
+            if not math.isclose(result["confidence"], predicted_probability, abs_tol=1e-5):
+                raise ValueError("The prediction API returned inconsistent confidence.")
+            if not isinstance(result["model_name"], str):
+                raise ValueError("The prediction API returned an invalid model name.")
 
-            # Predict the audio class
-            prediction = int(model.predict(input_data)[0])
-
-            class_mapping = metadata["xgboost_class_mapping"]
-            predicted_label = class_mapping[str(prediction)]
-
-            # Calculate prediction confidence
-            probabilities = model.predict_proba(input_data)[0]
-            predicted_index = list(model.classes_).index(prediction)
-            confidence = float(probabilities[predicted_index]) * 100
-
-            st.session_state["prediction"] = predicted_label
-            st.session_state["confidence"] = confidence
+            st.session_state["prediction_result"] = result
             st.session_state["inference_error"] = None
 
-        except Exception as error:
-            st.session_state["inference_error"] = str(error)
+        except (requests.RequestException, ValueError) as error:
+            st.session_state["inference_error"] = (
+                "Could not complete the prediction request. "
+                f"Check that the backend is running at {PREDICTION_API_URL}. "
+                f"Details: {error}"
+            )
         if st.session_state.get("inference_error"):
             st.error(
                 "Analysis failed: "
                 + st.session_state["inference_error"]
             )
         else:
-            predicted_label = st.session_state["prediction"]
-            confidence = st.session_state["confidence"]
+            result = st.session_state["prediction_result"]
+            predicted_label = result["prediction"]
+            confidence = float(result["confidence"]) * 100
+            human_probability = float(result["human_probability"]) * 100
+            synthetic_probability = float(result["synthetic_probability"]) * 100
 
             st.markdown(f"""
             <div class="panel" style="text-align:center;padding:34px 20px;">
@@ -508,6 +532,14 @@ with col_results:
                 </div>
                 <div class="panel-subtitle" style="margin-top:10px;">
                     Prediction confidence: {confidence:.2f}%
+                </div>
+                <div class="panel-subtitle" style="margin-top:8px;">
+                    Human probability: {human_probability:.2f}% ·
+                    Synthetic probability: {synthetic_probability:.2f}%
+                </div>
+                <div class="panel-subtitle" style="margin-top:8px;">
+                    Model: {result["model_name"]} ·
+                    Processing time: {float(result["processing_time_ms"]):.1f} ms
                 </div>
                 <div style="margin-top:20px;">
                     <span class="status-pill">ANALYSIS COMPLETE</span>
