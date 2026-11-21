@@ -1,13 +1,14 @@
 # SonicSense
 
 SonicSense classifies an audio recording as **human** or **synthetic** using a
-trained XGBoost model. The repository includes a FastAPI backend and a Streamlit
-interface. The backend reuses the project training feature extractor in
-`extract_audio_features.py`; it does not retrain or modify the model.
+trained XGBoost model. This repository includes a FastAPI backend, a React/Vite
+dashboard in `sonicsense-frontend/`, and the Streamlit client in `app.py`. The
+backend reuses the project feature extractor in `extract_audio_features.py`
+and does not retrain or modify the model.
 
 ## Requirements and installation
 
-Use Python 3.10 or later. From the repository root, create and activate a
+Use Python 3.12 or later. From the repository root, create and activate a
 virtual environment, then install the backend and test dependencies:
 
 ```powershell
@@ -18,8 +19,9 @@ python -m pip install -r backend\requirements.txt
 
 The requirements include FastAPI/Uvicorn and multipart upload support,
 Streamlit's HTTP client (`requests`), the audio stack (`librosa`, `soundfile`,
-NumPy, SciPy), model dependencies (XGBoost, scikit-learn, pandas, joblib), and
-the test runner.
+PyAV, NumPy, SciPy), model dependencies (XGBoost, scikit-learn, pandas, joblib),
+and the test runner. PyAV provides a fallback decoder for M4A/MP4 audio;
+SoundFile remains the primary decoder for formats it supports.
 
 The backend expects the checked-in model and metadata at:
 
@@ -46,7 +48,7 @@ documentation is at `http://127.0.0.1:8000/docs`.
 
 `POST /predict` accepts one multipart upload with field name `audio`. Supported
 filename extensions are WAV, FLAC, MP3, OGG, and M4A; uploads are limited to
-25 MiB. The contents must also be decodable by the installed audio libraries.
+25 MiB. SoundFile decodes WAV, FLAC, MP3, and OGG; PyAV handles M4A/MP4.
 
 Example:
 
@@ -67,7 +69,37 @@ The model expects exactly the 134 columns and order in
 `results/model_metadata.json`. The API validates the metadata against the
 shared feature extractor and the loaded model before serving predictions.
 
-## Start the frontend
+### Training and inference preprocessing
+
+The model's 134-feature path is `extract_audio_features.py`, shared by feature
+generation and uploaded-audio inference. It decodes samples, averages
+multichannel audio to mono, and resamples to 16 kHz before calculating the
+features. It does not denoise, peak-normalize, trim silence, or split uploads
+into 5-second segments. `preprocess_audio.py` is a separate dataset utility
+and is not invoked by this model's feature-generation or inference path.
+Applying those extra steps at inference would change the model inputs and
+requires retraining and evaluation first.
+
+## Start the React frontend
+
+From the repository root, enter the React/Vite project directory:
+
+```powershell
+Set-Location sonicsense-frontend
+npm ci
+Copy-Item .env.example .env
+npm run dev
+```
+
+Open `http://localhost:5173`. Configure the backend URL in `.env` using
+`VITE_API_BASE_URL=http://127.0.0.1:8000`. The backend allows this development
+origin through CORS. Build the production assets with `npm run build`.
+
+The React client supports audio upload and microphone recording. Recordings
+are submitted as WAV using the same `POST /predict` API contract described
+above.
+
+## Start the optional Streamlit client
 
 In a second terminal, with the virtual environment active:
 
@@ -95,8 +127,10 @@ python -m pytest -q
 
 `backend/app/test_inference.py` exercises the HTTP API with generated test
 audio, invalid/empty uploads, model readiness, and feature-schema validation.
-These generated waveforms are pipeline tests, **not** labeled human or
-synthetic speech recordings.
+`test_audio_decoder_parity.py` also checks mono/stereo MP3, OGG, and M4A
+decoding. Generated test waveforms are pipeline tests, **not** labeled human or
+synthetic speech recordings. From the React project directory, run
+`npm run build` to type-check and build the frontend.
 
 For five held-out feature rows of each actual class, run:
 
@@ -113,6 +147,13 @@ they are not a guarantee of future or real-world performance.
 
 ## Known limitations
 
+- Raw ASVspoof/FakeAVCeleb audio is not included in this checkout. The feature
+  CSV referenced by the saved metadata is outside this repository, so the
+  original dataset preprocessing cannot be reproduced here without obtaining
+  the source data and updating its paths.
+- CORS is restricted to local development origins. Before deployment, add the
+  exact frontend origin to the backend allowlist; wildcard production CORS is
+  not enabled.
 - The saved evaluation used a stratified random split. Speaker/source
   identifiers were unavailable, so it does not establish speaker-independent
   or source-independent generalization.

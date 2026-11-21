@@ -3,14 +3,15 @@
 import logging
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.inference import (
     AudioInputError,
     AudioProcessingError,
+    FeatureSchemaError,
     InferenceExecutionError,
     MAX_UPLOAD_BYTES,
     ModelUnavailableError,
-    FeatureSchemaError,
     load_model_and_metadata,
     predict_audio,
 )
@@ -18,6 +19,15 @@ from backend.app.inference import (
 
 LOGGER = logging.getLogger(__name__)
 app = FastAPI(title="SonicSense API", version="1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
+)
 
 
 @app.get("/health")

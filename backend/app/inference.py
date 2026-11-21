@@ -25,6 +25,16 @@ ALLOWED_EXTENSIONS = {".wav", ".flac", ".mp3", ".ogg", ".m4a"}
 EXPECTED_CLASS_MAPPING = {0: "synthetic", 1: "human"}
 
 
+def _metadata_class_mapping(metadata):
+    mapping = {
+        int(label): name
+        for label, name in metadata["xgboost_class_mapping"].items()
+    }
+    if mapping != EXPECTED_CLASS_MAPPING:
+        raise ValueError("Metadata class mapping does not match the expected labels.")
+    return mapping
+
+
 class AudioInputError(ValueError):
     """Raised when an uploaded file does not meet the input requirements."""
 
@@ -70,12 +80,13 @@ def load_model_and_metadata():
         if metadata.get("number_of_features") != len(columns):
             raise ValueError("Metadata feature count is inconsistent.")
 
-        mapping = {
-            int(label): name
-            for label, name in metadata["xgboost_class_mapping"].items()
-        }
+        mapping = _metadata_class_mapping(metadata)
         classes = [int(label) for label in model.classes_]
-        if mapping != EXPECTED_CLASS_MAPPING or set(classes) != {0, 1}:
+        if (
+            mapping != EXPECTED_CLASS_MAPPING
+            or len(classes) != len(set(classes))
+            or set(classes) != set(mapping)
+        ):
             raise ValueError("Model classes do not match the documented class mapping.")
         if getattr(model, "n_features_in_", None) != len(columns):
             raise ValueError("Model feature count does not match metadata.")
@@ -104,7 +115,7 @@ def _validate_upload(filename, audio_bytes):
         raise AudioInputError("The uploaded audio file is empty.")
     if len(audio_bytes) > MAX_UPLOAD_BYTES:
         raise AudioInputError(
-            f"Audio file exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.",
+            f"Audio file exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MiB limit.",
             status_code=413,
         )
 
@@ -132,39 +143,41 @@ def _build_input_frame(features, columns):
     return pd.DataFrame([values], columns=columns)
 
 
-def predict_audio(filename, audio_bytes):
-    """Run the training feature extractor and classify one uploaded recording."""
+def predict_features(features, model=None, metadata=None, started=None):
+    """Validate and classify an extracted feature mapping using backend rules."""
 
-    _validate_upload(filename, audio_bytes)
-    model, metadata = load_model_and_metadata()
-    started = time.perf_counter()
-
-    try:
-        features = extract_audio_features_from_bytes(audio_bytes)
-    except Exception as error:
-        LOGGER.info("Audio decoding or feature extraction failed: %s", error)
-        raise AudioProcessingError(
-            "The audio could not be decoded or analyzed."
-        ) from error
-
+    if model is None or metadata is None:
+        model, metadata = load_model_and_metadata()
+    if started is None:
+        started = time.perf_counter()
     input_frame = _build_input_frame(features, metadata["feature_columns"])
 
     try:
         class_ids = [int(value) for value in model.classes_]
+        class_mapping = _metadata_class_mapping(metadata)
+        if (
+            len(class_ids) != len(set(class_ids))
+            or set(class_ids) != set(class_mapping)
+        ):
+            raise ValueError("Model classes do not match the documented class mapping.")
+
         predicted_class = int(model.predict(input_frame)[0])
-        probabilities = np.asarray(model.predict_proba(input_frame)[0], dtype=float)
-        if predicted_class not in class_ids or probabilities.size != len(class_ids):
+        probability_matrix = np.asarray(model.predict_proba(input_frame), dtype=float)
+        if probability_matrix.shape != (1, len(class_ids)):
             raise ValueError("Model returned an unexpected class or probability shape.")
+        probabilities = probability_matrix[0]
         if not np.all(np.isfinite(probabilities)):
             raise ValueError("Model returned non-finite probabilities.")
+        if np.any(probabilities < 0) or np.any(probabilities > 1):
+            raise ValueError("Model returned probabilities outside [0, 1].")
+        if not np.isclose(np.sum(probabilities), 1.0, rtol=0.0, atol=1e-6):
+            raise ValueError("Model probabilities do not sum to 1.")
+        if predicted_class not in class_mapping:
+            raise ValueError("Model returned an unknown predicted class.")
 
-        class_mapping = {
-            int(label): name
-            for label, name in metadata["xgboost_class_mapping"].items()
-        }
         probability_by_label = {
-            class_mapping[class_id]: float(probabilities[class_ids.index(class_id)])
-            for class_id in class_ids
+            class_mapping[class_id]: float(probabilities[index])
+            for index, class_id in enumerate(class_ids)
         }
         prediction = class_mapping[predicted_class]
         confidence = probability_by_label[prediction]
@@ -182,3 +195,26 @@ def predict_audio(filename, audio_bytes):
         "model_name": metadata["best_model"],
         "processing_time_ms": (time.perf_counter() - started) * 1000,
     }
+
+
+def predict_audio(filename, audio_bytes):
+    """Run the validated backend upload and inference pipeline."""
+
+    _validate_upload(filename, audio_bytes)
+    model, metadata = load_model_and_metadata()
+    started = time.perf_counter()
+
+    try:
+        features = extract_audio_features_from_bytes(audio_bytes)
+    except Exception as error:
+        LOGGER.info("Audio decoding or feature extraction failed: %s", error)
+        raise AudioProcessingError(
+            "The audio could not be decoded or analyzed."
+        ) from error
+
+    return predict_features(
+        features,
+        model=model,
+        metadata=metadata,
+        started=started,
+    )

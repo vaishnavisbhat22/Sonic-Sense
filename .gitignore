@@ -1,4 +1,26 @@
 
 __pycache__/
-
+*.py[cod]
 .venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+node_modules/
+dist/
+*.tsbuildinfo
+*.log
+
+/package-lock.json
+/audio_features_v2.csv
+/data/processed/audio_features_v2.csv
+/audio_dataset/
+/extractedflac_D_aa/
+/processed_audio/

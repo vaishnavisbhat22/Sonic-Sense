@@ -1,4 +1,4 @@
-"""Extract labeled, fixed-length acoustic feature vectors from WAV files."""
+"""Extract labeled, fixed-length acoustic feature vectors from audio files."""
 
 import argparse
 import csv
@@ -251,12 +251,79 @@ def extract_audio_features_from_signal(audio, sample_rate):
 def extract_audio_features(audio_path):
     """Read an audio file and compute its feature vector."""
 
-    audio, sample_rate = sf.read(
-        str(audio_path),
-        dtype="float32",
-        always_2d=False,
-    )
+    audio, sample_rate = _read_audio(audio_path)
     return extract_audio_features_from_signal(audio, sample_rate)
+
+
+def _read_audio(source):
+    """Decode audio with SoundFile, falling back to PyAV for other containers."""
+
+    if hasattr(source, "seek"):
+        source.seek(0)
+
+    try:
+        return sf.read(
+            source,
+            dtype="float32",
+            always_2d=False,
+        )
+    except RuntimeError:
+        if hasattr(source, "seek"):
+            source.seek(0)
+        return _read_audio_with_pyav(source)
+
+
+def _read_audio_with_pyav(source):
+    """Decode containers unsupported by SoundFile without changing sample rate."""
+
+    import av
+
+    channel_chunks = []
+    sample_rate = None
+
+    with av.open(source, mode="r") as container:
+        audio_stream = next(
+            (stream for stream in container.streams if stream.type == "audio"),
+            None,
+        )
+        if audio_stream is None:
+            raise ValueError("Audio stream not found.")
+
+        for frame in container.decode(audio=audio_stream.index):
+            if sample_rate is None:
+                sample_rate = frame.sample_rate
+            elif frame.sample_rate != sample_rate:
+                raise ValueError("Audio sample rate changes within the stream.")
+
+            channels = len(frame.layout.channels)
+            samples = frame.to_ndarray()
+            if frame.format.is_planar:
+                samples = samples.T
+            else:
+                samples = samples.reshape(-1, channels)
+
+            if np.issubdtype(samples.dtype, np.integer):
+                limits = np.iinfo(samples.dtype)
+                if limits.min < 0:
+                    samples = samples.astype(np.float32) / max(
+                        abs(limits.min),
+                        limits.max,
+                    )
+                else:
+                    midpoint = (limits.max + 1) / 2
+                    samples = (samples.astype(np.float32) - midpoint) / midpoint
+            else:
+                samples = samples.astype(np.float32)
+
+            channel_chunks.append(samples)
+
+    if not channel_chunks or sample_rate is None:
+        raise ValueError("Audio stream contains no decodable samples.")
+
+    audio = np.concatenate(channel_chunks, axis=0)
+    if audio.shape[1] == 1:
+        audio = audio[:, 0]
+    return audio, sample_rate
 
 
 def extract_audio_features_from_bytes(audio_bytes):
@@ -265,12 +332,7 @@ def extract_audio_features_from_bytes(audio_bytes):
     if not audio_bytes:
         raise ValueError("Audio data is empty.")
 
-    audio, sample_rate = librosa.load(
-        io.BytesIO(audio_bytes),
-        sr=TARGET_SAMPLE_RATE,
-        mono=True,
-        dtype=np.float32,
-    )
+    audio, sample_rate = _read_audio(io.BytesIO(audio_bytes))
     return extract_audio_features_from_signal(audio, sample_rate)
 
 

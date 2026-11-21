@@ -7,9 +7,11 @@ pandas
 scipy
 librosa
 soundfile
-scikit-learn
-xgboost
+av
+scikit-learn==1.9.1
+xgboost==3.4.1
 requests
 streamlit
+matplotlib
 pytest
 httpx

@@ -8,6 +8,7 @@ import soundfile as sf
 from fastapi.testclient import TestClient
 
 from backend.app import inference
+from backend.app import main as main_module
 from backend.app.inference import (
     FeatureSchemaError,
     _build_input_frame,
@@ -33,6 +34,57 @@ def test_health_checks_model_readiness():
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "model_name": "XGBoost"}
+
+
+def test_health_allows_react_origin():
+    response = client.get(
+        "/health",
+        headers={"Origin": "http://localhost:5173"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_health_allows_loopback_ip_react_origin():
+    response = client.get(
+        "/health",
+        headers={"Origin": "http://127.0.0.1:5173"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5173"
+
+
+def test_react_cors_preflight_allows_upload_origin():
+    response = client.options(
+        "/predict",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+    allowed_methods = response.headers["access-control-allow-methods"]
+    assert all(method in allowed_methods for method in ("GET", "POST", "OPTIONS"))
+    assert "content-type" in response.headers["access-control-allow-headers"].lower()
+
+
+def test_cors_rejects_unconfigured_origin():
+    response = client.options(
+        "/predict",
+        headers={
+            "Origin": "https://untrusted.example",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers
 
 
 def test_model_classes_and_feature_schema_match_metadata():
@@ -61,6 +113,36 @@ def test_uploaded_wav_returns_prediction_contract():
     assert 0 <= result["human_probability"] <= 1
     assert 0 <= result["synthetic_probability"] <= 1
     assert result["human_probability"] + result["synthetic_probability"] == pytest.approx(1)
+
+
+def test_audio_upload_reaches_inference(monkeypatch):
+    received = {}
+    expected_result = {
+        "prediction": "human",
+        "confidence": 0.8,
+        "human_probability": 0.8,
+        "synthetic_probability": 0.2,
+        "model_name": "XGBoost",
+        "processing_time_ms": 12.0,
+    }
+
+    def fake_predict_audio(filename, audio_bytes):
+        received["filename"] = filename
+        received["audio_bytes"] = audio_bytes
+        return expected_result
+
+    monkeypatch.setattr(main_module, "predict_audio", fake_predict_audio)
+    response = client.post(
+        "/predict",
+        files={"audio": ("react-upload.wav", b"audio payload", "audio/wav")},
+    )
+
+    assert response.status_code == 200
+    assert received == {
+        "filename": "react-upload.wav",
+        "audio_bytes": b"audio payload",
+    }
+    assert response.json() == expected_result
 
 
 def test_unsupported_upload_type_is_rejected():

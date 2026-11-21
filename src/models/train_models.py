@@ -38,7 +38,7 @@ warnings.filterwarnings("ignore")
 
 RANDOM_STATE = 42
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]  # Expected: <project>/src/models/train_models.py
 
 DATA_PATH = PROJECT_ROOT / "data" / "processed" / "audio_features_v2.csv"
 
@@ -232,11 +232,15 @@ def create_models(y_train):
         ),
 
         "XGBoost": XGBClassifier(
-            n_estimators=250,
-            max_depth=6,
-            learning_rate=0.05,
+            n_estimators=500,
+            max_depth=4,
+            learning_rate=0.03,
+            min_child_weight=5,
             subsample=0.8,
             colsample_bytree=0.8,
+            gamma=0.2,
+            reg_alpha=0.1,
+            reg_lambda=2.0,
             scale_pos_weight=human_weight,
             objective="binary:logistic",
             eval_metric="logloss",
